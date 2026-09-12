@@ -249,7 +249,7 @@ export default function App() {
         }]
       };
 
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${activeKey}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${activeKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -284,7 +284,7 @@ export default function App() {
       else if (actionType === 'social') prompt = `Based on the following text, act as a viral social media manager. Generate: 1) Three highly engaging and clickbaity video titles. 2) A captivating social media caption (hook) to keep viewers engaged. 3) A list of relevant trending hashtags. Please write the response entirely in Burmese (Myanmar) language with appropriate emojis.\n\nText:\n${sttResult}`;
       else prompt = `Rewrite this as an engaging "Movie Recap" style script in Burmese:\n\n${sttResult}`;
 
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${activeKey}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${activeKey}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
       });
