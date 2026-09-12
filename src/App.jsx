@@ -7,9 +7,7 @@ import {
   Sparkles
 } from 'lucide-react';
 
-// ဒီနေရာမှာ Bro ရဲ့ ကိုယ်ပိုင် (Admin) API Key ကို ထည့်ပေးပါ။
-// User တွေက API Key မထည့်ထားရင် 20MB အောက် ဖိုင်တွေအတွက် ဒီ Key ကို အလိုအလျောက် သုံးပေးပါလိမ့်မယ်။
-const SYSTEM_API_KEY = ""; 
+const SYSTEM_API_KEY = ""; // 👈 ကိုယ်ပိုင် API Key ကို ဒီနေရာမှာ ထည့်ပါ
 
 const VOICES = [
   { id: 'Charon', name: 'အောင်အောင်', gender: 'Male' }, { id: 'Fenrir', name: 'ရဲရင့်', gender: 'Male' },
@@ -64,23 +62,6 @@ const chunkText = (text, maxLength = 1200) => {
     currentIdx = endIdx;
   }
   return chunks;
-};
-
-const createWavFile = (pcmData, sampleRate) => {
-  const numChannels = 1; const bitsPerSample = 16;
-  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-  const blockAlign = numChannels * (bitsPerSample / 8);
-  const dataSize = pcmData.length;
-  const buffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(buffer);
-  const writeString = (view, offset, string) => { for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i)); };
-  writeString(view, 0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); writeString(view, 8, 'WAVE');
-  writeString(view, 12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); 
-  view.setUint16(22, numChannels, true); view.setUint32(24, sampleRate, true); view.setUint32(28, byteRate, true);
-  view.setUint16(32, blockAlign, true); view.setUint16(34, bitsPerSample, true); writeString(view, 36, 'data');
-  view.setUint32(40, dataSize, true);
-  const pcmBytes = new Uint8Array(buffer, 44); pcmBytes.set(pcmData);
-  return new Blob([view], { type: 'audio/wav' });
 };
 
 const AdvancedPlayer = ({ item, onDelete, theme }) => {
@@ -168,6 +149,7 @@ export default function App() {
   const [sttError, setSttError] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState('');
+  const fileInputRef = useRef(null);
 
   // TTS State
   const [ttsText, setTtsText] = useState(() => localStorage.getItem('mz_tts_text') || "");
@@ -202,24 +184,18 @@ export default function App() {
     }
   };
 
+  const getActiveKey = (fileSize) => {
+    const isSmallFile = fileSize <= 20 * 1024 * 1024;
+    return isSmallFile && SYSTEM_API_KEY ? SYSTEM_API_KEY : apiKey;
+  };
+
   const handleTranscribe = async () => {
     if (!sttFile) return setSttError("ကျေးဇူးပြု၍ Audio သို့မဟုတ် Video ဖိုင်ရွေးပါ။");
     
-    // Check API Key Logic (20MB Limit for System Key)
-    const isUnder20MB = sttFile.size <= 20 * 1024 * 1024;
-    let activeKey = apiKey.trim();
-
+    const activeKey = getActiveKey(sttFile.size);
     if (!activeKey) {
-      if (isUnder20MB && SYSTEM_API_KEY) {
-        activeKey = SYSTEM_API_KEY; // Use admin key if file is under 20MB
-      } else {
-        setShowSettings(true);
-        if (!isUnder20MB) {
-          return setSttError("ဖိုင်ဆိုဒ် 20MB ထက်ကျော်လွန်နေသဖြင့် မိမိကိုယ်ပိုင် API Key ထည့်သွင်းရန် လိုအပ်ပါသည်။");
-        } else {
-          return setSttError("Google API Key ထည့်သွင်းပေးရန် လိုအပ်ပါသည်။ (Settings တွင် ထည့်ပါ)");
-        }
-      }
+      setShowSettings(true);
+      return setSttError("20MB အထက် ဖိုင်များကို စာသားပြောင်းရန် သင့်ကိုယ်ပိုင် API Key လိုအပ်ပါသည်။ Settings တွင် ထည့်သွင်းပါ။");
     }
 
     setIsTranscribing(true); setSttError(''); setSttResult(''); setAiResult('');
@@ -240,6 +216,27 @@ export default function App() {
       const uploadData = await uploadRes.json();
       if (!uploadRes.ok) throw new Error(uploadData.error?.message || "Upload failed");
       const fileUri = uploadData.file.uri;
+      const fileName = uploadData.file.name;
+
+      setSttProgressText('ဖိုင်ကို စစ်ဆေးနေပါသည် (ခေတ္တစောင့်ပါ)... ⏳');
+      
+      // Polling mechanism to check file state
+      let isFileReady = false;
+      while (!isFileReady) {
+        const checkRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileName}?key=${activeKey}`);
+        const checkData = await checkRes.json();
+        
+        if (!checkRes.ok) throw new Error("ဖိုင်စစ်ဆေးခြင်း မအောင်မြင်ပါ။");
+        
+        if (checkData.state === 'ACTIVE') {
+          isFileReady = true;
+        } else if (checkData.state === 'FAILED') {
+          throw new Error("ဗီဒီယိုဖိုင် ပြင်ဆင်မှု ကျရှုံးသွားပါသည်။ အခြားဖိုင်တစ်ခု ပြောင်းစမ်းကြည့်ပါ။");
+        } else {
+          // Wait 3 seconds before checking again
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+      }
 
       setSttProgressText('AI စာသားပြောင်းပေးနေပါသည်... 🧠');
       
@@ -252,14 +249,13 @@ export default function App() {
         }]
       };
 
-      let response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${activeKey}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${activeKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
 
-      let data = await response.json();
-
+      const data = await response.json();
       if (!response.ok) throw new Error(data.error?.message || "Transcription failed");
       
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -267,7 +263,7 @@ export default function App() {
       else throw new Error("စာသားရှာမတွေ့ပါ။");
 
     } catch (err) {
-      setSttError(err.message || "အမှားအယွင်းဖြစ်ပေါ်နေပါသည်။ API Key မှန်ကန်မှုရှိမရှိ စစ်ဆေးပါ။");
+      setSttError(err.message || "အမှားအယွင်းဖြစ်ပေါ်နေပါသည်။");
     } finally {
       setIsTranscribing(false);
       setSttProgressText('');
@@ -276,13 +272,8 @@ export default function App() {
 
   const handleAIAction = async (actionType) => {
     if (!sttResult) return;
-    
-    // Check API Key
-    let activeKey = apiKey.trim() || SYSTEM_API_KEY;
-    if (!activeKey) {
-      setShowSettings(true);
-      return setSttError("AI အသုံးပြုရန် API Key လိုအပ်ပါသည်။");
-    }
+    const activeKey = SYSTEM_API_KEY || apiKey;
+    if (!activeKey) return setShowSettings(true);
     
     setAiLoading(true); setSttError(''); setAiResult('');
     
@@ -293,7 +284,7 @@ export default function App() {
       else if (actionType === 'social') prompt = `Based on the following text, act as a viral social media manager. Generate: 1) Three highly engaging and clickbaity video titles. 2) A captivating social media caption (hook) to keep viewers engaged. 3) A list of relevant trending hashtags. Please write the response entirely in Burmese (Myanmar) language with appropriate emojis.\n\nText:\n${sttResult}`;
       else prompt = `Rewrite this as an engaging "Movie Recap" style script in Burmese:\n\n${sttResult}`;
 
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${activeKey}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${activeKey}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
       });
@@ -321,6 +312,23 @@ export default function App() {
     setActiveTab('tts');
   };
 
+  const createWavFile = (pcmData, sampleRate) => {
+    const numChannels = 1; const bitsPerSample = 16;
+    const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+    const blockAlign = numChannels * (bitsPerSample / 8);
+    const dataSize = pcmData.length;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+    const writeString = (view, offset, string) => { for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i)); };
+    writeString(view, 0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); writeString(view, 8, 'WAVE');
+    writeString(view, 12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); 
+    view.setUint16(22, numChannels, true); view.setUint32(24, sampleRate, true); view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true); view.setUint16(34, bitsPerSample, true); writeString(view, 36, 'data');
+    view.setUint32(40, dataSize, true);
+    const pcmBytes = new Uint8Array(buffer, 44); pcmBytes.set(pcmData);
+    return new Blob([view], { type: 'audio/wav' });
+  };
+
   const fetchTTSChunk = async (chunkText, index, activeKey) => {
     const promptText = selectedEmotion !== 'Neutral' ? `Say in a ${selectedEmotion.toLowerCase()} tone: ${chunkText}` : chunkText;
     const payload = { contents: [{ parts: [{ text: promptText }] }], generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: selectedVoice } } } }, model: "gemini-2.5-flash-preview-tts" };
@@ -335,20 +343,14 @@ export default function App() {
         const bytes = new Uint8Array(binaryString.length);
         for (let j = 0; j < binaryString.length; j++) bytes[j] = binaryString.charCodeAt(j);
         return { bytes, mimeType: inlineData.mimeType, index };
-      } catch (err) { attempt++; if (attempt >= 3) throw new Error(`အပိုင်း (${index + 1}) အား ဖန်တီးရာတွင် အမှားဖြစ်နေပါသည်။ API Key မှန်ကန်မှုရှိမရှိ စစ်ဆေးပါ။`); await new Promise(r => setTimeout(r, delay)); delay *= 2; }
+      } catch (err) { attempt++; if (attempt >= 3) throw new Error(`အပိုင်း (${index + 1}) အား ဖန်တီးရာတွင် အမှားဖြစ်နေပါသည်။`); await new Promise(r => setTimeout(r, delay)); delay *= 2; }
     }
   };
 
   const handleGenerateTTS = async () => {
     if (!ttsText.trim()) return setTtsError("ကျေးဇူးပြု၍ စာသားထည့်ပေးပါ။");
-    
-    // Check API Key
-    let activeKey = apiKey.trim() || SYSTEM_API_KEY;
-    if (!activeKey) {
-      setShowSettings(true);
-      return setTtsError("အသံဖန်တီးရန် Google API Key လိုအပ်ပါသည်။ Settings တွင် ထည့်သွင်းပါ။");
-    }
-
+    const activeKey = SYSTEM_API_KEY || apiKey;
+    if (!activeKey) return setShowSettings(true);
     setIsGeneratingTTS(true); setTtsError('');
     const textChunks = chunkText(ttsText, 1200); 
     
@@ -495,7 +497,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TTS TAB */}
+        {}
         {activeTab === 'tts' && (
           <div className="grid lg:grid-cols-3 gap-6">
             <div className={`lg:col-span-2 ${panelBg} border rounded-3xl overflow-hidden flex flex-col`}>
@@ -539,7 +541,6 @@ export default function App() {
           </div>
         )}
 
-        {/* HISTORY TAB */}
         {activeTab === 'history' && (
           <div className="max-w-2xl mx-auto">
             {ttsHistory.length === 0 ? (
@@ -565,7 +566,7 @@ export default function App() {
             
             <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="AIzaSy..." className={`w-full p-4 rounded-xl border outline-none font-mono text-sm mb-4 ${isDark ? 'bg-gray-950 border-gray-700 text-white focus:border-blue-500' : 'bg-gray-50 border-gray-300 text-gray-900 focus:border-blue-500'}`} />
             
-            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-xs text-blue-500 hover:underline mb-6 block font-bold">👉 API Key အသစ်ယူရန် ဤနေရာကိုနှိပ်ပါ (အခမဲ့)</a>
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-xs text-blue-500 hover:underline mb-6 block font-bold">👉 API Key အသစ်ယူရန် ဤနေရာကိုနှိပ်ပါ</a>
             
             <button onClick={() => setShowSettings(false)} className="w-full py-3.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl flex justify-center items-center gap-2"><Save className="w-5 h-5"/> သိမ်းဆည်းမည်</button>
           </div>
