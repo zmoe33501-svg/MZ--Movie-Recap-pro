@@ -202,48 +202,60 @@ export default function App() {
     try {
       setSttProgressText('ဖိုင်ကို Upload တင်နေပါသည်... ⬆️');
       
+      // Android ဖုန်းတွေက export လုပ်ထားတဲ့ ဖိုင်တချို့မှာ type ပျောက်နေတတ်လို့ Fallback ထည့်ပေးထားခြင်း
+      const mimeType = sttFile.type || (sttFile.name.endsWith('.mp3') ? 'audio/mp3' : 'video/mp4');
+
       const uploadRes = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${activeKey}`, {
         method: 'POST',
         headers: {
           'X-Goog-Upload-Protocol': 'raw',
           'X-Goog-Upload-Command': 'start, upload',
           'X-Goog-Upload-Header-Content-Length': sttFile.size.toString(),
-          'X-Goog-Upload-Header-Content-Type': sttFile.type,
+          'X-Goog-Upload-Header-Content-Type': mimeType,
+          'Content-Type': mimeType // Browser CORS ပြဿနာမတက်အောင် ထပ်ဖြည့်ထားသည်
         },
         body: sttFile
       });
       
+      if (!uploadRes.ok) {
+        const errText = await uploadRes.text();
+        throw new Error(errText || "Upload failed");
+      }
+      
       const uploadData = await uploadRes.json();
-      if (!uploadRes.ok) throw new Error(uploadData.error?.message || "Upload failed");
       const fileUri = uploadData.file.uri;
-      const fileName = uploadData.file.name;
+      const fileName = uploadData.file.name; // ဤနေရာတွင် 'files/xxxxxxxx' အတိုင်းထွက်ပါသည်
 
       setSttProgressText('ဖိုင်ကို စစ်ဆေးနေပါသည် (ခေတ္တစောင့်ပါ)... ⏳');
       
       // Polling mechanism to check file state
       let isFileReady = false;
-      while (!isFileReady) {
-        const checkRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/files/${uploadData.file.name}?key=${activeKey}`);
-        const checkData = await checkRes.json();
+      let checkAttempts = 0;
+      while (!isFileReady && checkAttempts < 20) {
+        // URL အမှားကို ပြင်ဆင်ထားသည် (v1beta/files/files ဖြစ်နေမှုကို ရှောင်ရှားရန်)
+        const checkRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileName}?key=${activeKey}`);
         
         if (!checkRes.ok) throw new Error("ဖိုင်စစ်ဆေးခြင်း မအောင်မြင်ပါ။");
+        const checkData = await checkRes.json();
         
         if (checkData.state === 'ACTIVE') {
           isFileReady = true;
         } else if (checkData.state === 'FAILED') {
           throw new Error("ဗီဒီယိုဖိုင် ပြင်ဆင်မှု ကျရှုံးသွားပါသည်။ အခြားဖိုင်တစ်ခု ပြောင်းစမ်းကြည့်ပါ။");
         } else {
-          // Wait 3 seconds before checking again
+          checkAttempts++;
           await new Promise(resolve => setTimeout(resolve, 3000));
         }
       }
+
+      if (!isFileReady) throw new Error("ဖိုင်စစ်ဆေးချိန် ကြာလွန်းနေပါသည်။");
 
       setSttProgressText('AI စာသားပြောင်းပေးနေပါသည်... 🧠');
       
       const payload = {
         contents: [{
           parts: [
-            { fileData: { mimeType: sttFile.type, fileUri: fileUri } },
+            { fileData: { mimeType: mimeType, fileUri: fileUri } },
             { text: "Transcribe the speech in this audio/video. If it's Burmese, transcribe in Burmese. If it's English, in English. Provide only the pure transcription text with proper punctuation, without any extra markdown or comments." }
           ]
         }]
@@ -263,7 +275,12 @@ export default function App() {
       else throw new Error("စာသားရှာမတွေ့ပါ။");
 
     } catch (err) {
-      setSttError(err.message || "အမှားအယွင်းဖြစ်ပေါ်နေပါသည်။");
+      console.error(err);
+      if (err.message === "Failed to fetch") {
+        setSttError("ဖိုင်အမျိုးအစား မှားယွင်းခြင်း (သို့) VPN ခံထားမှုကြောင့် Upload တင်၍မရပါ။ VPN ပိတ်ပြီး ပြန်စမ်းကြည့်ပါ။");
+      } else {
+        setSttError(err.message || "အမှားအယွင်းဖြစ်ပေါ်နေပါသည်။");
+      }
     } finally {
       setIsTranscribing(false);
       setSttProgressText('');
